@@ -1,8 +1,10 @@
+import os
 import requests
 import streamlit as st
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain.embeddings import HuggingFaceEmbeddings
 from langchain_community.document_loaders import WebBaseLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
@@ -14,6 +16,8 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 
 load_dotenv()
 
+
+base_path = os.environ.get('OPENAI_API_BASE', 'http://localhost:8080/v1')
 
 def get_vectorstore_from_url(url):
     # get the text in document form
@@ -28,3 +32,44 @@ def get_vectorstore_from_url(url):
     vector_store = Chroma.from_documents(document_chunks, OpenAIEmbeddings())
 
     return vector_store
+
+
+def get_context_retriever_chain(vector_store):
+    llm = ChatOpenAI()
+
+    retriever = vector_store.as_retriever()
+
+    prompt = ChatPromptTemplate.from_messages([
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("user", "{input}"),
+        ("user",
+         "Given the above conversation, generate a search query to look up in order to get information relevant to the conversation")
+    ])
+
+    retriever_chain = create_history_aware_retriever(llm, retriever, prompt)
+
+
+def get_conversational_rag_chain(retriever_chain):
+    llm = ChatOpenAI()
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "Answer the user's questions based on the below context:\n\n{context}"),
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("user", "{input}"),
+    ])
+
+    stuff_documents_chain = create_stuff_documents_chain(llm, prompt)
+
+    return create_retrieval_chain(retriever_chain, stuff_documents_chain)
+
+
+def get_response(user_input):
+    retriever_chain = get_context_retriever_chain(st.session_state.vector_store)
+    conversation_rag_chain = get_conversational_rag_chain(retriever_chain)
+
+    response = conversation_rag_chain.invoke({
+        "chat_history": st.session_state.chat_history,
+        "input": user_query
+    })
+
+    return response['answer']
