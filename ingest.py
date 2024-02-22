@@ -1,14 +1,11 @@
 import os
-import requests
 import streamlit as st
-from bs4 import BeautifulSoup
-from urllib.parse import urljoin
 from langchain_core.messages import AIMessage, HumanMessage
-from langchain.embeddings import HuggingFaceEmbeddings
 from langchain_community.document_loaders import WebBaseLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
@@ -16,8 +13,22 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 
 load_dotenv()
 
+# pip install streamlit langchain lanchain-openai beautifulsoup4 python-dotenv chromadb
 
 base_path = os.environ.get('OPENAI_API_BASE', 'http://localhost:8080/v1')
+
+DATA_PATH = 'data/'
+DB_FAISS_PATH = '/Users/psemp/Documents/GitHub/Chat-With-Doc/vectorstore'
+
+print(base_path)
+
+llm = ChatOpenAI(
+    temperature=0,
+    model_name="luna-ai-llama2",
+    openai_api_base=base_path,
+    openai_api_key="Not needed for local server",
+)
+
 
 def get_vectorstore_from_url(url):
     # get the text in document form
@@ -35,7 +46,10 @@ def get_vectorstore_from_url(url):
 
 
 def get_context_retriever_chain(vector_store):
-    llm = ChatOpenAI()
+    # embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2",
+    #                                    model_kwargs={'device': 'cpu'})
+
+    # retriever = Chroma(persist_directory=DB_FAISS_PATH, embedding_function=embeddings)
 
     retriever = vector_store.as_retriever()
 
@@ -48,9 +62,10 @@ def get_context_retriever_chain(vector_store):
 
     retriever_chain = create_history_aware_retriever(llm, retriever, prompt)
 
+    return retriever_chain
+
 
 def get_conversational_rag_chain(retriever_chain):
-    llm = ChatOpenAI()
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", "Answer the user's questions based on the below context:\n\n{context}"),
@@ -73,3 +88,41 @@ def get_response(user_input):
     })
 
     return response['answer']
+
+
+# app config
+st.set_page_config(page_title="Chat with websites", page_icon="🤖")
+st.title("Chat with websites")
+
+# sidebar
+with st.sidebar:
+    st.header("Settings")
+    website_url = st.text_input("Website URL")
+
+if website_url is None or website_url == "":
+    st.info("Please enter a website URL")
+
+else:
+    # session state
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = [
+            AIMessage(content="Hello, I am a bot. How can I help you?"),
+        ]
+    if "vector_store" not in st.session_state:
+        st.session_state.vector_store = get_vectorstore_from_url(website_url)
+
+        # user input
+    user_query = st.chat_input("Type your message here...")
+    if user_query is not None and user_query != "":
+        response = get_response(user_query)
+        st.session_state.chat_history.append(HumanMessage(content=user_query))
+        st.session_state.chat_history.append(AIMessage(content=response))
+
+    # conversation
+    for message in st.session_state.chat_history:
+        if isinstance(message, AIMessage):
+            with st.chat_message("AI"):
+                st.write(message.content)
+        elif isinstance(message, HumanMessage):
+            with st.chat_message("Human"):
+                st.write(message.content)
